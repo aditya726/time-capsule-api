@@ -52,7 +52,7 @@ uvicorn main:app --reload
 By default, the app runs at [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
 You can explore the API docs at:
-- Swagger UI: `/docs`
+- Swagger UI: `http://127.0.0.1:8000/docs`
 ---
 
 
