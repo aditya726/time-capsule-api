@@ -1,18 +1,19 @@
-from fastapi import FastAPI, Depends, HTTPException, Query
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
+from fastapi import FastAPI, Depends, HTTPException, Query, BackgroundTasks
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean
 from sqlalchemy.orm import relationship, Session
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 import secrets
 import string
+import asyncio
 from auth import route as auth_router, Base, engine, get_db, User, get_current_user
 
 app = FastAPI(title="Time-Capsule")
 
 app.include_router(auth_router)
 
-# Capsule model (naive datetime)
+# Capsule model with expiration flag
 class Capsule(Base):
     __tablename__ = "capsules"
     id = Column(Integer, primary_key=True, index=True)
@@ -21,6 +22,7 @@ class Capsule(Base):
     created_at = Column(DateTime, default=datetime.now) 
     unlock_code = Column(String(12), nullable=False, unique=True)
     user_id = Column(Integer, ForeignKey("user.id"))
+    expired = Column(Boolean, default=False)  # New column for expiration status
 
     user = relationship("User", back_populates="capsules")
 
@@ -65,6 +67,7 @@ class CapsuleListItem(BaseModel):
     unlock_at: datetime
     created_at: datetime
     is_unlockable: bool
+    expired: bool  # Added expired field
     
     class Config:
         from_attributes = True
@@ -84,6 +87,40 @@ def generate_unlock_code(length=12):
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
+# Background expiration task
+async def check_expirations():
+    """
+    Background task that runs every hour to check for expired capsules.
+    A capsule is considered expired when current_time > unlock_at + 30 days.
+    """
+    while True:
+        try:
+            db = next(get_db())
+            current_time = datetime.now()
+            
+            # Find capsules that need to be marked as expired
+            # (unlock_at + 30 days < current_time AND not already marked expired)
+            expired_capsules = db.query(Capsule).filter(
+                Capsule.unlock_at + timedelta(days=30) < current_time,
+                Capsule.expired == False
+            ).all()
+            
+            # Mark as expired
+            for capsule in expired_capsules:
+                capsule.expired = True
+            
+            if expired_capsules:
+                print(f"Marked {len(expired_capsules)} capsules as expired")
+                
+            db.commit()
+            
+        except Exception as e:
+            print(f"Error in expiration check: {e}")
+        finally:
+            db.close()
+        
+        # Run every hour (3600 seconds)
+        await asyncio.sleep(3600)
 
 @app.post("/capsules", response_model=CapsuleResponse)
 async def create_capsule(
@@ -107,7 +144,8 @@ async def create_capsule(
         message=capsule.message,
         unlock_at=unlock_at,
         unlock_code=unlock_code,
-        user_id=user.id
+        user_id=user.id,
+        expired=False
     )
 
     db.add(new_capsule)
@@ -152,14 +190,23 @@ async def list_capsules(
    
     capsule_list = []
     for capsule in capsules:
-        is_unlockable = current_time >= capsule.unlock_at and current_time <= capsule.unlock_at + timedelta(days=30)
+        # Update is_unlockable logic to consider expiration
+        is_unlockable = (current_time >= capsule.unlock_at and 
+                        current_time <= capsule.unlock_at + timedelta(days=30) and
+                        not capsule.expired)
+        
+        # Check if it should be marked as expired now
+        if not capsule.expired and current_time > capsule.unlock_at + timedelta(days=30):
+            capsule.expired = True
+            db.commit()
         
         capsule_list.append({
             "id": capsule.id,
             "unlock_code": capsule.unlock_code,
             "unlock_at": capsule.unlock_at,
             "created_at": capsule.created_at,
-            "is_unlockable": is_unlockable
+            "is_unlockable": is_unlockable,
+            "expired": capsule.expired
         })
     
     return {
@@ -254,7 +301,13 @@ async def get_capsule(
             detail="403 forbidden"
         )
 
-    if current_time > capsule.unlock_at + timedelta(days=30):
+    # Check if expired (either by flag or by calculation)
+    if capsule.expired or current_time > capsule.unlock_at + timedelta(days=30):
+        # If not marked as expired but should be, mark it now
+        if not capsule.expired and current_time > capsule.unlock_at + timedelta(days=30):
+            capsule.expired = True
+            db.commit()
+            
         raise HTTPException(
             status_code=410,
             detail="410 GONE"
@@ -262,11 +315,11 @@ async def get_capsule(
 
     return capsule
 
-@app.delete('/capsules{capsule_id}')
-async def DeleteCapsule(
-    capsule_id:int,
-    code:str = Query(...,description="Unlock code for Capsule"),
-    db = Depends(get_db),
+@app.delete('/capsules/{capsule_id}')  # Fixed route path
+async def delete_capsule(  # Fixed function name
+    capsule_id: int,
+    code: str = Query(..., description="Unlock code for Capsule"),
+    db: Session = Depends(get_db),
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     username = current_user["username"]
@@ -297,3 +350,12 @@ async def DeleteCapsule(
     db.commit()
     
     return {"detail": "Capsule deleted successfully"}
+
+# Start the background task when the app starts
+@app.on_event("startup")
+async def startup_event():
+    """
+    Register the hourly expiration check task when the application starts.
+    This ensures we regularly mark expired capsules without checking on every request.
+    """
+    asyncio.create_task(check_expirations())
