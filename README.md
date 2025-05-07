@@ -21,7 +21,7 @@ This project allows users to leave time-delayed messages — like a digital time
 
 ### 1️⃣ Clone the repository
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/aditya726/time-capsule-api.git
 cd <your-repo-directory>
 ```
 
