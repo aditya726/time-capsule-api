@@ -1,3 +1,9 @@
+Deployed Link : https://time-capsule-api-4rob.onrender.com
+---
+-to test all the api endpoints go to https://time-capsule-api-4rob.onrender.com/docs
+-to authorize the user please click on Authorize button on the top right corner and input your registered username and password.
+
+
 # Time-Capsule
 
 A FastAPI-based web application where users can create time-locked digital capsules. Each capsule contains a message that can only be unlocked after a specified future date. Capsules automatically expire 30 days after the unlock date.
