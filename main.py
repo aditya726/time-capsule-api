@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship, Session
 from datetime import datetime, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 import secrets
 import string
@@ -17,8 +17,8 @@ class Capsule(Base):
     __tablename__ = "capsules"
     id = Column(Integer, primary_key=True, index=True)
     message = Column(Text, nullable=False)
-    unlock_at = Column(DateTime, nullable=False)  
-    created_at = Column(DateTime, default=datetime.now)  
+    unlock_at = Column(DateTime, nullable=False) 
+    created_at = Column(DateTime, default=datetime.now) 
     unlock_code = Column(String(12), nullable=False, unique=True)
     user_id = Column(Integer, ForeignKey("user.id"))
 
@@ -31,7 +31,15 @@ Base.metadata.create_all(bind=engine)
 # Pydantic models
 class CapsuleCreate(BaseModel):
     message: str
-    unlock_at: datetime 
+    unlock_at: datetime  
+
+class CapsuleUpdate(BaseModel):
+    message: Optional[str] = None
+    unlock_at: Optional[datetime] = None
+
+class CapsuleUpdateRespone(BaseModel):
+    message: str
+    unlock_at: datetime
 
 class CapsuleResponse(BaseModel):
     id: int
@@ -76,7 +84,7 @@ def generate_unlock_code(length=12):
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
-# Create capsule endpoint
+
 @app.post("/capsules", response_model=CapsuleResponse)
 async def create_capsule(
     capsule: CapsuleCreate,
@@ -91,7 +99,7 @@ async def create_capsule(
 
     unlock_at = capsule.unlock_at
     if unlock_at.tzinfo is not None:
-        unlock_at = unlock_at.replace(tzinfo=None)
+        unlock_at = unlock_at.replace(tzinfo=None)  
 
     unlock_code = generate_unlock_code()
 
@@ -126,13 +134,13 @@ async def list_capsules(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    
+
     total_capsules = db.query(Capsule).filter(Capsule.user_id == user.id).count()
     
-    # Calculate total pages
+
     total_pages = (total_capsules + limit - 1) // limit
     
-    # Get paginated capsules
+ 
     capsules = db.query(Capsule).filter(Capsule.user_id == user.id)\
         .order_by(Capsule.created_at.desc())\
         .offset((page - 1) * limit)\
@@ -141,7 +149,7 @@ async def list_capsules(
     
     current_time = datetime.now() 
     
-    
+   
     capsule_list = []
     for capsule in capsules:
         is_unlockable = current_time >= capsule.unlock_at and current_time <= capsule.unlock_at + timedelta(days=30)
@@ -162,6 +170,67 @@ async def list_capsules(
         "total_pages": total_pages
     }
 
+@app.put("/capsules/{capsule_id}", response_model=CapsuleUpdateRespone)
+async def update_capsule(
+    capsule_id: int,
+    capsule_update: CapsuleUpdate,
+    code: str = Query(..., description="Unlock code for the capsule"),
+    db: Session = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+
+    username = current_user["username"]
+    user = db.query(User).filter(User.username == username).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    capsule = db.query(Capsule).filter(
+        Capsule.id == capsule_id
+    ).first()
+    
+
+    if not capsule:
+        raise HTTPException(status_code=404, detail="Capsule not found")
+    
+    if capsule.user_id != user.id:
+        raise HTTPException(status_code=403, detail="403 forbidden")
+    
+    if capsule.unlock_code != code:
+        raise HTTPException(status_code=401, detail="401 unauthorized")
+    
+    current_time = datetime.now()
+    if current_time >= capsule.unlock_at:
+        raise HTTPException(
+            status_code=403, 
+            detail="403 forbidden(Unlock time already passed)"
+        )
+    
+    if capsule_update.message is not None:
+        capsule.message = capsule_update.message
+        
+    if capsule_update.unlock_at is not None:
+        unlock_at = capsule_update.unlock_at
+        if unlock_at.tzinfo is not None:
+            unlock_at = unlock_at.replace(tzinfo=None) 
+            
+        if unlock_at <= current_time:
+            raise HTTPException(
+                status_code=400,
+                detail="Unlock time must be in the future"
+            )
+            
+        capsule.unlock_at = unlock_at
+    
+    db.commit()
+    db.refresh(capsule)
+    
+    return {
+        "message":capsule.message,
+        "unlock_at": capsule.unlock_at
+    }
+
+
 @app.get("/capsules/{capsule_id}", response_model=CapsuleFullResponse)
 async def get_capsule(
     capsule_id: int,
@@ -177,7 +246,7 @@ async def get_capsule(
     if capsule.unlock_code != code:
         raise HTTPException(status_code=401, detail="401 unauthorized")
 
-    current_time = datetime.now()
+    current_time = datetime.now() 
 
     if current_time < capsule.unlock_at:
         raise HTTPException(
@@ -192,3 +261,39 @@ async def get_capsule(
         )
 
     return capsule
+
+@app.delete('/capsules{capsule_id}')
+async def DeleteCapsule(
+    capsule_id:int,
+    code:str = Query(...,description="Unlock code for Capsule"),
+    db = Depends(get_db),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    username = current_user["username"]
+    user = db.query(User).filter(User.username == username).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    capsule = db.query(Capsule).filter(Capsule.id == capsule_id).first()
+
+    if not capsule:
+        raise HTTPException(status_code=404, detail="Capsule not found")
+    
+    if capsule.user_id != user.id:
+        raise HTTPException(status_code=403, detail="403 forbidden")
+    
+    if capsule.unlock_code != code:
+        raise HTTPException(status_code=401, detail="401 unauthorized")
+    
+    current_time = datetime.now()
+    if current_time >= capsule.unlock_at:
+        raise HTTPException(
+            status_code=403, 
+            detail="403 forbidden (Cannot delete capsule after unlock time)"
+        )
+    
+    db.delete(capsule)
+    db.commit()
+    
+    return {"detail": "Capsule deleted successfully"}
