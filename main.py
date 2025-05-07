@@ -122,6 +122,10 @@ async def check_expirations():
         # Run every hour (3600 seconds)
         await asyncio.sleep(3600)
 
+@app.get("/")
+def welcome():
+    return {"This is Time-Capsule"}
+
 @app.post("/capsules", response_model=CapsuleResponse)
 async def create_capsule(
     capsule: CapsuleCreate,
