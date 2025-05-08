@@ -76,21 +76,64 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
 def get_user_by_username(db: Session, username: str):
     return db.query(User).filter(User.username == username).first()
 
+def get_user_by_email(db: Session, email: str):
+    return db.query(User).filter(User.email == email).first()
+
 # Routes
 @route.post("/register", status_code=status.HTTP_201_CREATED)
 async def register_user(user: UserRegistration, db: Session = Depends(get_db)):
     if get_user_by_username(db, user.username):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username already exists")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Username already exists"
+        )
+
+    if get_user_by_email(db, user.email):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Email already exists"
+        )
+
     if user.confirm_password != user.password:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Passwords do not match")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, 
+            detail="Passwords do not match"
+        )
 
-    hashed_password = hash_password(user.password)
-    new_user = User(username=user.username, email=user.email, password=hashed_password)
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-
-    return {"message": "User registered successfully"}
+    try:
+        hashed_password = hash_password(user.password)
+        new_user = User(
+            username=user.username, 
+            email=user.email, 
+            password=hashed_password,
+            created_at=datetime.now(timezone.utc)
+        )
+        
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        
+        return {"message": "User registered successfully"}
+    
+    except IntegrityError as e:
+        db.rollback()
+        # This will catch any database constraint violations
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Database error: {str(e)}"
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred: {str(e)}"
+        )
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred: {str(e)}"
+        )
 
 
 #login
