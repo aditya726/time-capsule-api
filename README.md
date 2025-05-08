@@ -1,7 +1,8 @@
 Deployed Link : https://time-capsule-api-4rob.onrender.com
 ---
 -to test all the api endpoints go to https://time-capsule-api-4rob.onrender.com/docs
--to authorize the user please click on Authorize button on the top right corner and input your registered username and password.
+-After registering on auth/register you can get your access token fron auth/login.
+-To test all protected endpoints please click the Authorize button on top right corner and enter your username and password
 
 
 # Time-Capsule
